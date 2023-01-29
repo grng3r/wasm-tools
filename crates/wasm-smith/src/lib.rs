@@ -57,7 +57,7 @@
 mod component;
 mod config;
 mod core;
-
+mod fuzz_helpers;
 pub use crate::core::{
     ConfiguredModule, InstructionKind, InstructionKinds, MaybeInvalidModule, Module,
 };
