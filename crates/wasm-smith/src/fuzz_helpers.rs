@@ -1,6 +1,7 @@
 use arbitrary::Unstructured;
 use crate::InstructionKinds;
 
+///export arbitrary creation for generator
 pub fn export_swarmconfig_arbitrary(u: &mut Unstructured)  -> crate::config::SwarmConfig {
         const MAX_MAXIMUM: usize = 1000;
 
