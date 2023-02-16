@@ -12,7 +12,7 @@
 mod error;
 mod info;
 mod module;
-mod mutators;
+pub mod mutators;//change
 
 pub use error::*;
 
