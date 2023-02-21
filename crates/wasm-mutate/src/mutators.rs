@@ -43,7 +43,7 @@ use self::translate::{DefaultTranslator, Translator};
 use std::borrow::Cow;
 
 use super::Result;
-use crate::WasmMutate;
+pub use crate::WasmMutate;
 use wasm_encoder::Module;
 use wasmparser::Operator;
 
