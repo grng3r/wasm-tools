@@ -162,11 +162,11 @@ pub struct WasmMutate<'wasm> {
     /// same input Wasm and same seed, `wasm-mutate` will always generate the
     /// same output Wasm.
     #[cfg_attr(feature = "clap", clap(short, long, default_value = "42"))]
-    seed: u64,
+    pub seed: u64,
 
     /// Only perform semantics-preserving transformations on the Wasm module.
     #[cfg_attr(feature = "clap", clap(long))]
-    preserve_semantics: bool,
+    pub preserve_semantics: bool,
 
     /// Fuel to control the time of the mutation.
     #[cfg_attr(
@@ -177,23 +177,23 @@ pub struct WasmMutate<'wasm> {
             default_value = "18446744073709551615", // u64::MAX
         )
     )]
-    fuel: u64,
+    pub fuel: u64,
 
     /// Only perform size-reducing transformations on the Wasm module. This
     /// allows `wasm-mutate` to be used as a test case reducer.
     #[cfg_attr(feature = "clap", clap(long))]
-    reduce: bool,
+    pub reduce: bool,
 
     // Note: this is only exposed via the programmatic interface, not via the
     // CLI.
     #[cfg_attr(feature = "clap", clap(skip = None))]
-    raw_mutate_func: Option<Arc<dyn Fn(&mut Vec<u8>, usize) -> Result<()>>>,
+    pub raw_mutate_func: Option<Arc<dyn Fn(&mut Vec<u8>, usize) -> Result<()>>>,
 
     #[cfg_attr(feature = "clap", clap(skip = None))]
-    rng: Option<SmallRng>,
+    pub rng: Option<SmallRng>,
 
     #[cfg_attr(feature = "clap", clap(skip = None))]
-    info: Option<ModuleInfo<'wasm>>,
+    pub info: Option<ModuleInfo<'wasm>>,
 }
 
 impl Default for WasmMutate<'_> {
