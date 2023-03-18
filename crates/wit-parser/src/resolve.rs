@@ -3,7 +3,7 @@ use crate::{
     Document, DocumentId, Error, Function, Interface, InterfaceId, Results, Type, TypeDef,
     TypeDefKind, TypeId, TypeOwner, UnresolvedPackage, World, WorldId, WorldItem,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use id_arena::{Arena, Id};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::{HashMap, HashSet};
@@ -263,6 +263,7 @@ impl Resolve {
                 match item {
                     WorldItem::Function(f) => remap.update_function(f),
                     WorldItem::Interface(i) => *i = remap.interfaces[i.index()],
+                    WorldItem::Type(i) => *i = remap.types[i.index()],
                 }
             }
             let new_id = self.worlds.alloc(world);
@@ -375,6 +376,65 @@ impl Resolve {
             .push(interface.name.as_ref()?);
         Some(base.to_string())
     }
+
+    /// Attempts to locate a default world for the `pkg` specified within this
+    /// [`Resolve`]. Optionally takes a string-based `world` "specifier" to
+    /// resolve the world.
+    ///
+    /// This is intended for use by bindings generators and such as the default
+    /// logic for locating a world within a package used for binding. The
+    /// `world` argument is typically a user-specified argument (which again is
+    /// optional and not required) where the `pkg` is determined ambiently by
+    /// the integration.
+    ///
+    /// If `world` is `None` (e.g. not specified by a user) then the package
+    /// must have exactly one `default world` within its documents, otherwise an
+    /// error will be returned. If `world` is `Some` then it's a `.`-separated
+    /// name where the first element is the name of the document and the second,
+    /// optional, element is the name of the `world`. For example the name `foo`
+    /// would mean the `default world` of the `foo` document. The name `foo.bar`
+    /// would mean the world named `bar` in the `foo` document.
+    pub fn select_world(&self, pkg: PackageId, world: Option<&str>) -> Result<WorldId> {
+        match world {
+            Some(world) => {
+                let mut parts = world.splitn(2, '.');
+                let doc = parts.next().unwrap();
+                let world = parts.next();
+                let doc = *self.packages[pkg]
+                    .documents
+                    .get(doc)
+                    .ok_or_else(|| anyhow!("no document named `{doc}` in package"))?;
+                match world {
+                    Some(name) => self.documents[doc]
+                        .worlds
+                        .get(name)
+                        .copied()
+                        .ok_or_else(|| anyhow!("no world named `{name}` in document")),
+                    None => self.documents[doc]
+                        .default_world
+                        .ok_or_else(|| anyhow!("no default world in document")),
+                }
+            }
+            None => {
+                if self.packages[pkg].documents.is_empty() {
+                    bail!("no documents found in package")
+                }
+
+                let mut unique_default_world = None;
+                for (_name, doc) in &self.documents {
+                    if let Some(default_world) = doc.default_world {
+                        if unique_default_world.is_some() {
+                            bail!("multiple default worlds found in package, one must be specified")
+                        } else {
+                            unique_default_world = Some(default_world);
+                        }
+                    }
+                }
+
+                unique_default_world.ok_or_else(|| anyhow!("no default world in package"))
+            }
+        }
+    }
 }
 
 /// Structure returned by [`Resolve::merge`] which contains mappings from
@@ -428,8 +488,7 @@ impl Remap {
         for id in self.types.iter().skip(foreign_types) {
             match &mut resolve.types[*id].owner {
                 TypeOwner::Interface(id) => *id = self.interfaces[id.index()],
-                TypeOwner::World(_) => unimplemented!(),
-                TypeOwner::None => {}
+                TypeOwner::World(_) | TypeOwner::None => {}
             }
         }
 
@@ -451,6 +510,14 @@ impl Remap {
             let new_id = resolve.worlds.alloc(world);
             assert_eq!(self.worlds.len(), id.index());
             self.worlds.push(new_id);
+        }
+
+        // As with interfaces, now update the ids of world-owned types.
+        for id in self.types.iter().skip(foreign_types) {
+            match &mut resolve.types[*id].owner {
+                TypeOwner::World(id) => *id = self.worlds[id.index()],
+                TypeOwner::Interface(_) | TypeOwner::None => {}
+            }
         }
 
         // And the final major step is transferring documents to `Resolve`
@@ -720,6 +787,7 @@ impl Remap {
         let mut exports = Vec::new();
         let mut import_funcs = Vec::new();
         let mut export_funcs = Vec::new();
+        let mut import_types = Vec::new();
         for ((name, item), span) in mem::take(&mut world.imports).into_iter().zip(import_spans) {
             match item {
                 WorldItem::Interface(id) => {
@@ -730,7 +798,11 @@ impl Remap {
                 }
                 WorldItem::Function(mut f) => {
                     self.update_function(&mut f);
-                    import_funcs.push((name, f));
+                    import_funcs.push((name, f, *span));
+                }
+                WorldItem::Type(id) => {
+                    let id = self.types[id.index()];
+                    import_types.push((name, id, *span));
                 }
             }
         }
@@ -744,8 +816,9 @@ impl Remap {
                 }
                 WorldItem::Function(mut f) => {
                     self.update_function(&mut f);
-                    export_funcs.push((name, f));
+                    export_funcs.push((name, f, *span));
                 }
+                WorldItem::Type(_) => unreachable!(),
             }
         }
 
@@ -762,28 +835,59 @@ impl Remap {
             resolving_stack: Default::default(),
             explicit_import_names: &explicit_import_names,
             explicit_export_names: &explicit_export_names,
+            names: Default::default(),
         };
         for (id, span) in imports {
             elaborate.import(id, span)?;
+        }
+        for (_name, id, span) in import_types.iter() {
+            if let TypeDefKind::Type(Type::Id(other)) = resolve.types[*id].kind {
+                if let TypeOwner::Interface(owner) = resolve.types[other].owner {
+                    elaborate.import(owner, *span)?;
+                }
+            }
         }
         for (id, span) in exports {
             elaborate.export(id, span)?;
         }
 
-        for (name, func) in import_funcs {
+        for (name, id, span) in import_types {
+            let prev = elaborate
+                .world
+                .imports
+                .insert(name.clone(), WorldItem::Type(id));
+            if prev.is_some() {
+                bail!(Error {
+                    msg: format!("export of type `{name}` shadows previously imported interface"),
+                    span,
+                })
+            }
+        }
+
+        for (name, func, span) in import_funcs {
             let prev = world
                 .imports
                 .insert(name.clone(), WorldItem::Function(func));
             if prev.is_some() {
-                bail!("import of function `{name}` shadows previously imported interface");
+                bail!(Error {
+                    msg: format!(
+                        "import of function `{name}` shadows previously imported interface"
+                    ),
+                    span,
+                })
             }
         }
-        for (name, func) in export_funcs {
+        for (name, func, span) in export_funcs {
             let prev = world
                 .exports
                 .insert(name.clone(), WorldItem::Function(func));
             if prev.is_some() {
-                bail!("export of function `{name}` shadows previously exported interface");
+                bail!(Error {
+                    msg: format!(
+                        "export of function `{name}` shadows previously exported interface"
+                    ),
+                    span,
+                })
             }
         }
 
@@ -814,6 +918,7 @@ struct WorldElaborator<'a, 'b> {
     world: &'b mut World,
     explicit_import_names: &'a HashMap<InterfaceId, String>,
     explicit_export_names: &'a HashMap<InterfaceId, String>,
+    names: HashMap<String, bool>,
 
     /// Set of imports which are either imported into the world already or in
     /// the `stack` to get processed, used to ensure the same dependency isn't
@@ -863,13 +968,16 @@ impl<'a> WorldElaborator<'a, '_> {
         assert_eq!(self.resolving_stack.pop(), Some((id, import)));
 
         let name = self.name_of(id, import);
-        let set = if import {
-            &mut self.world.imports
-        } else {
-            &mut self.world.exports
-        };
-        let prev = set.insert(name.clone(), WorldItem::Interface(id));
+        let prev = self.names.insert(name.clone(), import);
+
         if prev.is_none() {
+            let set = if import {
+                &mut self.world.imports
+            } else {
+                &mut self.world.exports
+            };
+            let prev = set.insert(name.clone(), WorldItem::Interface(id));
+            assert!(prev.is_none());
             return Ok(());
         }
 
@@ -898,8 +1006,7 @@ impl<'a> WorldElaborator<'a, '_> {
         }
         writeln!(
             msg,
-            "conflicts with a previously imported interface \
-                             using the name `{name}`",
+            "conflicts with a previous interface using the name `{name}`",
         )
         .unwrap();
         bail!(Error { span, msg })

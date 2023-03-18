@@ -11,8 +11,8 @@ use std::{
 };
 use wasmparser::{
     types::{ComponentEntityType, ComponentInstanceType, Types, TypesRef},
-    Chunk, ComponentExport, ComponentExternalKind, ComponentImport, ComponentTypeRef, Encoding,
-    Parser, Payload, ValidPayload, Validator, WasmFeatures,
+    Chunk, ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload, ValidPayload,
+    Validator, WasmFeatures,
 };
 
 pub(crate) fn type_desc(item: ComponentEntityType) -> &'static str {
@@ -262,31 +262,16 @@ impl<'a> Component<'a> {
         &self,
         index: ExportIndex,
     ) -> Option<(&str, &str, ComponentEntityType)> {
-        let (name, url, kind, index) = self.export(index)?;
-        Some((
-            name,
-            url,
-            self.types
-                .component_entity_type_from_export(&ComponentExport {
-                    name,
-                    url,
-                    kind,
-                    index,
-                })?,
-        ))
+        let (name, url, _kind, _index) = self.export(index)?;
+        Some((name, url, self.types.component_entity_type_of_extern(name)?))
     }
 
     pub(crate) fn import_entity_type(
         &self,
         index: ImportIndex,
     ) -> Option<(&str, &str, ComponentEntityType)> {
-        let (name, url, ty) = self.import(index)?;
-        Some((
-            name,
-            url,
-            self.types
-                .component_entity_type_from_import(&ComponentImport { name, url, ty })?,
-        ))
+        let (name, url, _ty) = self.import(index)?;
+        Some((name, url, self.types.component_entity_type_of_extern(name)?))
     }
 
     /// Finds a compatible instance export on the component for the given instance type.
@@ -917,7 +902,7 @@ mod test {
         )?)?;
         let b = graph.add_component(Component::from_bytes(
             "b",
-            b"(component (import \"x\" (func)) (export \"x\" (func 0)))".as_ref(),
+            b"(component (import \"x\" (func)) (export \"y\" (func 0)))".as_ref(),
         )?)?;
         let ai = graph.instantiate(a)?;
         let bi = graph.instantiate(b)?;
@@ -950,7 +935,7 @@ mod test {
         )?)?;
         let b = graph.add_component(Component::from_bytes(
             "b",
-            b"(component (import \"x\" (func)) (export \"x\" (func 0)))".as_ref(),
+            b"(component (import \"x\" (func)) (export \"y\" (func 0)))".as_ref(),
         )?)?;
         let ai = graph.instantiate(a)?;
         let bi = graph.instantiate(b)?;
@@ -975,7 +960,7 @@ mod test {
         )?)?;
         let b = graph.add_component(Component::from_bytes(
             "b",
-            b"(component (import \"x\" (func)) (export \"x\" (func 0)))".as_ref(),
+            b"(component (import \"x\" (func)) (export \"y\" (func 0)))".as_ref(),
         )?)?;
         let ai = graph.instantiate(a)?;
         let bi = graph.instantiate(b)?;
@@ -1001,7 +986,7 @@ mod test {
         )?)?;
         let b = graph.add_component(Component::from_bytes(
             "b",
-            b"(component (import \"x\" (func)) (export \"x\" (func 0)))".as_ref(),
+            b"(component (import \"x\" (func)) (export \"y\" (func 0)))".as_ref(),
         )?)?;
         let ai = graph.instantiate(a)?;
         let bi = graph.instantiate(b)?;
@@ -1207,24 +1192,29 @@ mod test {
         let a = graph.add_component(Component::from_bytes(
             "a",
             b"(component
+  (type (tuple u32 u32))
   (import \"i1\" (instance (export \"e1\" (func)) (export \"e3\" (func (param \"a\" u32)))))
   (import \"i2\" (func))
   (import \"i3\" (component))
   (import \"i4\" (core module))
+  (import \"i5\" (type (eq 0)))
   (export \"e1\" (instance 0))
   (export \"e2\" (func 0))
   (export \"e3\" (component 0))
   (export \"e4\" (core module 0))
+  (export \"e5\" (type 1))
 )"
             .as_ref(),
         )?)?;
         let b = graph.add_component(Component::from_bytes(
             "b",
             b"(component
-  (import \"i1\" (instance (export \"e2\" (func)) (export \"e3\" (func (param \"a\" u64)))))
+  (type (tuple u32 u32))
+  (import \"i1\" (instance (export \"e2\" (func)) (export \"e3\" (func (param \"a\" u32)))))
   (import \"i2\" (func))
   (import \"i3\" (component))
   (import \"i4\" (core module))
+  (import \"i5\" (type (eq 0)))
 )"
             .as_ref(),
         )?)?;
@@ -1250,29 +1240,32 @@ mod test {
         let wat = wasmprinter::print_bytes(&encoded)?.replace("\r\n", "\n");
         assert_eq!(
             r#"(component
-  (core type (;0;)
-    (module)
-  )
   (type (;0;)
     (instance
       (type (;0;) (func))
       (export (;0;) "e1" (func (type 0)))
-      (type (;1;) (func (param "a" u64)))
+      (type (;1;) (func (param "a" u32)))
       (export (;1;) "e3" (func (type 1)))
       (type (;2;) (func))
       (export (;2;) "e2" (func (type 2)))
     )
   )
+  (import "i1" (instance (;0;) (type 0)))
   (type (;1;) (func))
+  (import "i2" (func (;0;) (type 1)))
   (type (;2;)
     (component)
   )
-  (import "i1" (instance (;0;) (type 0)))
-  (import "i2" (func (;0;) (type 1)))
   (import "i3" (component (;0;) (type 2)))
+  (core type (;0;)
+    (module)
+  )
   (import "i4" (core module (;0;) (type 0)))
+  (type (;3;) (tuple u32 u32))
+  (import "i5" (type (eq 3)))
   (component (;1;)
-    (type (;0;)
+    (type (;0;) (tuple u32 u32))
+    (type (;1;)
       (instance
         (type (;0;) (func))
         (export (;0;) "e1" (func (type 0)))
@@ -1280,48 +1273,53 @@ mod test {
         (export (;1;) "e3" (func (type 1)))
       )
     )
-    (import "i1" (instance (;0;) (type 0)))
-    (type (;1;) (func))
-    (import "i2" (func (;0;) (type 1)))
-    (type (;2;)
+    (import "i1" (instance (;0;) (type 1)))
+    (type (;2;) (func))
+    (import "i2" (func (;0;) (type 2)))
+    (type (;3;)
       (component)
     )
-    (import "i3" (component (;0;) (type 2)))
+    (import "i3" (component (;0;) (type 3)))
     (core type (;0;)
       (module)
     )
     (import "i4" (core module (;0;) (type 0)))
+    (import "i5" (type (eq 0)))
     (export (;1;) "e1" (instance 0))
     (export (;1;) "e2" (func 0))
     (export (;1;) "e3" (component 0))
     (export (;1;) "e4" (core module 0))
+    (export (;5;) "e5" (type 1))
   )
   (component (;2;)
-    (type (;0;)
+    (type (;0;) (tuple u32 u32))
+    (type (;1;)
       (instance
         (type (;0;) (func))
         (export (;0;) "e2" (func (type 0)))
-        (type (;1;) (func (param "a" u64)))
+        (type (;1;) (func (param "a" u32)))
         (export (;1;) "e3" (func (type 1)))
       )
     )
-    (import "i1" (instance (;0;) (type 0)))
-    (type (;1;) (func))
-    (import "i2" (func (;0;) (type 1)))
-    (type (;2;)
+    (import "i1" (instance (;0;) (type 1)))
+    (type (;2;) (func))
+    (import "i2" (func (;0;) (type 2)))
+    (type (;3;)
       (component)
     )
-    (import "i3" (component (;0;) (type 2)))
+    (import "i3" (component (;0;) (type 3)))
     (core type (;0;)
       (module)
     )
     (import "i4" (core module (;0;) (type 0)))
+    (import "i5" (type (eq 0)))
   )
   (instance (;1;) (instantiate 1
       (with "i1" (instance 0))
       (with "i2" (func 0))
       (with "i3" (component 0))
       (with "i4" (core module 0))
+      (with "i5" (type 4))
     )
   )
   (alias export 1 "e2" (func (;1;)))
@@ -1332,6 +1330,7 @@ mod test {
       (with "i3" (component 3))
       (with "i4" (core module 1))
       (with "i1" (instance 0))
+      (with "i5" (type 4))
     )
   )
   (instance (;3;) (instantiate 2
@@ -1339,6 +1338,7 @@ mod test {
       (with "i3" (component 3))
       (with "i4" (core module 1))
       (with "i1" (instance 0))
+      (with "i5" (type 4))
     )
   )
   (instance (;4;) (instantiate 2
@@ -1346,6 +1346,7 @@ mod test {
       (with "i3" (component 3))
       (with "i4" (core module 1))
       (with "i1" (instance 0))
+      (with "i5" (type 4))
     )
   )
 )"#,

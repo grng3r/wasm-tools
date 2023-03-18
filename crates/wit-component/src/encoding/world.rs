@@ -91,7 +91,7 @@ impl<'a> ComponentWorld<'a> {
             if required.is_empty() {
                 continue;
             }
-            let wasm = crate::gc::run(wasm, &required)
+            let wasm = crate::gc::run(wasm, &required, self.info.realloc)
                 .context("failed to reduce input adapter module to its minimal size")?;
             let info = validate_adapter_module(&wasm, resolve, *world, metadata, &required)
                 .context("failed to validate the imports of the minimized adapter module")?;
@@ -137,6 +137,7 @@ impl<'a> ComponentWorld<'a> {
                         add_func(func, Some(name));
                     }
                 }
+                WorldItem::Type(_) => {}
             }
         }
         return required;
@@ -223,6 +224,7 @@ impl<'a> ComponentWorld<'a> {
                     }
                     Ok(())
                 }
+                WorldItem::Type(_) => Ok(()),
             }
         }
 
@@ -315,6 +317,7 @@ impl<'a> ComponentWorld<'a> {
                         }
                     }
                 }
+                WorldItem::Type(id) => live.add_type_id(resolve, *id),
             }
         }
     }

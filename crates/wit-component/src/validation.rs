@@ -11,7 +11,7 @@ use wit_parser::{
 };
 
 fn is_canonical_function(name: &str) -> bool {
-    name.starts_with("cabi_")
+    name.starts_with("cabi_") || name.starts_with("canonical_abi_")
 }
 
 fn wasm_sig_to_func_type(signature: WasmSignature) -> FuncType {
@@ -139,7 +139,9 @@ pub fn validate_module<'a>(
                             if is_canonical_function(export.name) {
                                 // TODO: validate that the cabi_realloc
                                 // function is [i32, i32, i32, i32] -> [i32]
-                                if export.name == "cabi_realloc" {
+                                if export.name == "cabi_realloc"
+                                    || export.name == "canonical_abi_realloc"
+                                {
                                     ret.realloc = Some(export.name);
                                 }
                                 continue;
@@ -189,7 +191,7 @@ pub fn validate_module<'a>(
                     map.insert(func, ty.clone());
                 }
             }
-            None | Some(WorldItem::Function(_)) => {
+            None | Some(WorldItem::Function(_) | WorldItem::Type(_)) => {
                 bail!("module requires an import interface named `{}`", name)
             }
         }
@@ -381,7 +383,7 @@ pub fn validate_adapter_module<'a>(
                 let prev = ret.required_imports.insert(name, funcs);
                 assert!(prev.is_none());
             }
-            None | Some((_, _, WorldItem::Function(_))) => {
+            None | Some((_, _, WorldItem::Function(_) | WorldItem::Type(_))) => {
                 bail!(
                     "adapter module requires an import interface named `{}`",
                     name
@@ -511,6 +513,8 @@ fn validate_exported_item(
                 })?;
             }
         }
+        // not required to have anything exported in the core wasm module
+        WorldItem::Type(_) => {}
     }
 
     Ok(())

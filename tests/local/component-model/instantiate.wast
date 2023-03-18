@@ -76,7 +76,7 @@
 (component
   (type $t string)
   (import "a" (value (type $t)))
-  (component $c (import "a" (value string)) (export "a" (value 0)))
+  (component $c (import "a" (value string)) (export "b" (value 0)))
   (instance (instantiate $c (with "a" (value 0))))
 )
 
@@ -122,14 +122,14 @@
 
   (core instance $c (instantiate $m))
   (core instance (instantiate $m))
-  
+
   ;; inline exports/imports
   (type $empty (instance))
   (instance $d (import "g") (type $empty))
   (instance (import "h"))
   (instance (import "i")
     (export "x" (func)))
-  (instance (export "c") (export "d") (import "x"))
+  (instance (export "j") (export "k") (import "x"))
 )
 
 (assert_invalid
@@ -175,15 +175,17 @@
     (import "b" (component $c))
     (instance $i (instantiate $m (with "a" (component $c))))
   )
-  "to be of type `function`")
+  "to be a function")
 
-(component
-  (import "a" (component $m
-    (import "a" (func))
-  ))
-  (import "b" (func $f (result string)))
-  (instance $i (instantiate $m (with "a" (func $f))))
-)
+(assert_invalid
+  (component
+    (import "a" (component $m
+      (import "a" (func))
+    ))
+    (import "b" (func $f (result string)))
+    (instance $i (instantiate $m (with "a" (func $f))))
+  )
+  "type mismatch for component instantiation argument `a`")
 
 (assert_invalid
   (component
@@ -193,7 +195,7 @@
     (import "b" (func (param "i" string)))
     (instance $i (instantiate $m (with "a" (func 0))))
   )
-  "function type mismatch")
+  "type mismatch for component instantiation argument `a`")
 
 (assert_invalid
   (component
@@ -207,7 +209,7 @@
     ))
     (instance $i (instantiate $m (with "a" (core module $i))))
   )
-  "module type mismatch")
+  "type mismatch for component instantiation argument `a`")
 
 (assert_invalid
   (component
@@ -219,7 +221,7 @@
     ))
     (instance $i (instantiate $m (with "a" (core module $i))))
   )
-  "module type mismatch")
+  "type mismatch for component instantiation argument `a`")
 
 ;; it's ok to give a module with fewer imports
 (component
@@ -454,7 +456,7 @@
       (with "a" (component $c))
     ))
   )
-  "expected component instantiation argument `a` to be of type `function`")
+  "expected component instantiation argument `a` to be a function")
 
 (assert_invalid
   (component
@@ -598,3 +600,32 @@
     )
   )
   "module instantiation argument `` does not export an item named `table`")
+
+;; Ensure a type can be an instantiation argument
+(component
+  (type (tuple u32 u32))
+  (import "a" (type (eq 0)))
+  (component
+    (type (tuple u32 u32))
+    (import "a" (type (eq 0)))
+  )
+  (instance (instantiate 0
+      (with "a" (type 1))
+    )
+  )
+)
+
+(assert_invalid
+  (component
+    (type (tuple string string))
+    (import "a" (type (eq 0)))
+    (component
+      (type (tuple u32 u32))
+      (import "a" (type (eq 0)))
+    )
+    (instance (instantiate 0
+        (with "a" (type 1))
+      )
+    )
+  )
+  "type mismatch for component instantiation argument `a`")

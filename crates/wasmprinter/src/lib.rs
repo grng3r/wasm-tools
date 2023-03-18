@@ -44,6 +44,10 @@ pub struct Printer {
     print_offsets: bool,
     printers: HashMap<String, Box<dyn FnMut(&mut Printer, usize, &[u8]) -> Result<()>>>,
     result: String,
+    /// The `i`th line in `result` is at offset `lines[i]`.
+    lines: Vec<usize>,
+    /// The binary offset for the `i`th line is `line_offsets[i]`.
+    line_offsets: Vec<Option<usize>>,
     nesting: u32,
     line: usize,
     group_lines: Vec<usize>,
@@ -160,6 +164,29 @@ impl Printer {
         Ok(mem::take(&mut self.result))
     }
 
+    /// Get the line-by-line WAT disassembly for the given Wasm, along with the
+    /// binary offsets for each line.
+    pub fn offsets_and_lines<'a>(
+        &'a mut self,
+        wasm: &[u8],
+    ) -> Result<impl Iterator<Item = (Option<usize>, &'a str)> + 'a> {
+        self.print_contents(wasm)?;
+
+        let end = self.result.len();
+        let result = &self.result;
+
+        let mut offsets = self.line_offsets.iter().copied();
+        let mut lines = self.lines.iter().copied().peekable();
+
+        Ok(std::iter::from_fn(move || {
+            let offset = offsets.next()?;
+            let i = lines.next()?;
+            let j = lines.peek().copied().unwrap_or(end);
+            let line = &result[i..j];
+            Some((offset, line))
+        }))
+    }
+
     fn read_names_and_code<'a>(
         &mut self,
         mut bytes: &'a [u8],
@@ -233,6 +260,11 @@ impl Printer {
     }
 
     fn print_contents(&mut self, mut bytes: &[u8]) -> Result<()> {
+        self.lines.clear();
+        self.lines.push(0);
+        self.line_offsets.clear();
+        self.line_offsets.push(Some(0));
+
         let mut expected = None;
         let mut states: Vec<State> = Vec::new();
         let mut parser = Parser::new(0);
@@ -687,17 +719,32 @@ impl Printer {
             ValType::F32 => self.result.push_str("f32"),
             ValType::F64 => self.result.push_str("f64"),
             ValType::V128 => self.result.push_str("v128"),
-            ValType::FuncRef => self.result.push_str("funcref"),
-            ValType::ExternRef => self.result.push_str("externref"),
+            ValType::Ref(rt) => self.print_reftype(rt)?,
         }
         Ok(())
     }
 
-    fn print_reftype(&mut self, ty: ValType) -> Result<()> {
+    fn print_reftype(&mut self, ty: RefType) -> Result<()> {
+        if ty == RefType::FUNCREF {
+            self.result.push_str("funcref");
+        } else if ty == RefType::EXTERNREF {
+            self.result.push_str("externref");
+        } else {
+            self.result.push_str("(ref ");
+            if ty.nullable {
+                self.result.push_str("null ");
+            }
+            self.print_heaptype(ty.heap_type)?;
+            self.result.push_str(")");
+        }
+        Ok(())
+    }
+
+    fn print_heaptype(&mut self, ty: HeapType) -> Result<()> {
         match ty {
-            ValType::FuncRef => self.result.push_str("func"),
-            ValType::ExternRef => self.result.push_str("extern"),
-            _ => bail!("invalid reference type {:?}", ty),
+            HeapType::Func => self.result.push_str("func"),
+            HeapType::Extern => self.result.push_str("extern"),
+            HeapType::TypedFunc(i) => self.result.push_str(&format!("{}", u32::from(i))),
         }
         Ok(())
     }
@@ -756,7 +803,7 @@ impl Printer {
         }
         self.print_limits(ty.initial, ty.maximum)?;
         self.result.push(' ');
-        self.print_valtype(ty.element_type)?;
+        self.print_reftype(ty.element_type)?;
         Ok(())
     }
 
@@ -816,7 +863,14 @@ impl Printer {
         for table in parser.into_iter_with_offsets() {
             let (offset, table) = table?;
             self.newline(offset);
-            self.print_table_type(state, &table, true)?;
+            self.print_table_type(state, &table.ty, true)?;
+            match &table.init {
+                TableInit::RefNull => {}
+                TableInit::Expr(expr) => {
+                    self.result.push_str(" ");
+                    self.print_const_expr(state, expr)?;
+                }
+            }
             self.end_group();
             state.core.tables += 1;
         }
@@ -987,6 +1041,10 @@ impl Printer {
 
     fn print_newline(&mut self, offset: Option<usize>) {
         self.result.push('\n');
+
+        self.lines.push(self.result.len());
+        self.line_offsets.push(offset);
+
         if self.print_offsets {
             match offset {
                 Some(offset) => write!(self.result, "(;@{offset:<6x};)").unwrap(),
@@ -1122,16 +1180,17 @@ impl Printer {
                 }
             }
             self.result.push(' ');
+
             match elem.items {
                 ElementItems::Functions(reader) => {
-                    self.print_reftype(elem.ty)?;
+                    self.result.push_str("func");
                     for idx in reader {
                         self.result.push(' ');
                         self.print_idx(&state.core.func_names, idx?)?
                     }
                 }
                 ElementItems::Expressions(reader) => {
-                    self.print_valtype(elem.ty)?;
+                    self.print_reftype(elem.ty)?;
                     for expr in reader {
                         self.result.push(' ');
                         self.print_const_expr_sugar(state, &expr?, "item")?
@@ -1772,6 +1831,10 @@ impl Printer {
         }
         self.result.push(' ');
         self.print_component_external_kind(state, export.kind, export.index)?;
+        if let Some(ty) = &export.ty {
+            self.result.push(' ');
+            self.print_component_import_ty(state, &ty, false)?;
+        }
         self.end_group();
         Ok(())
     }

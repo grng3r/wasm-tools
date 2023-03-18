@@ -15,7 +15,8 @@
   (core module (;1;)
     (type (;0;) (func (param i32)))
     (type (;1;) (func (result i32)))
-    (type (;2;) (func))
+    (type (;2;) (func (param i32 i32 i32 i32) (result i32)))
+    (type (;3;) (func))
     (import "env" "memory" (memory (;0;) 0))
     (import "new" "get-two" (func $get_two (;0;) (type 0)))
     (func (;1;) (type 1) (result i32)
@@ -38,27 +39,52 @@
       local.get 0
       global.set $__stack_pointer
     )
-    (func $initialize_stack_pointer (;2;) (type 2)
+    (func $realloc_via_memory_grow (;2;) (type 2) (param i32 i32 i32 i32) (result i32)
       (local i32)
+      i32.const 0
+      local.get 0
+      i32.ne
+      if ;; label = @1
+        unreachable
+      end
+      i32.const 0
+      local.get 1
+      i32.ne
+      if ;; label = @1
+        unreachable
+      end
+      i32.const 65536
+      local.get 3
+      i32.ne
+      if ;; label = @1
+        unreachable
+      end
       i32.const 1
       memory.grow
-      local.tee 0
+      local.tee 4
       i32.const -1
       i32.eq
       if ;; label = @1
         unreachable
       end
-      local.get 0
-      i32.const 1
-      i32.add
+      local.get 4
       i32.const 16
       i32.shl
+    )
+    (func $allocate_stack (;3;) (type 3)
+      i32.const 0
+      i32.const 0
+      i32.const 8
+      i32.const 65536
+      call $realloc_via_memory_grow
+      i32.const 65536
+      i32.add
       global.set $__stack_pointer
     )
     (global $__stack_pointer (;0;) (mut i32) i32.const 0)
     (global $some_other_mutable_global (;1;) (mut i32) i32.const 0)
     (export "get_sum" (func 1))
-    (start $initialize_stack_pointer)
+    (start $allocate_stack)
   )
   (core module (;2;)
     (type (;0;) (func (param i32)))

@@ -156,7 +156,7 @@ pub struct EmbedOpts {
     /// world`, or it can be a `foo/bar` name where `foo` names a document and
     /// `bar` names a world within that document.
     #[clap(short, long)]
-    world: String,
+    world: Option<String>,
 
     /// Don't read a core wasm module as input, instead generating a "dummy"
     /// module as a placeholder.
@@ -180,30 +180,13 @@ impl EmbedOpts {
             Some(self.io.parse_input_wasm()?)
         };
         let (resolve, id) = parse_wit(&self.wit)?;
-
-        let mut parts = self.world.split('/');
-        let doc = match parts.next() {
-            Some(name) => match resolve.packages[id].documents.get(name) {
-                Some(doc) => *doc,
-                None => bail!("no document named `{name}` in package"),
-            },
-            None => bail!("invalid `--world` argument"),
-        };
-        let world = match parts.next() {
-            Some(name) => match resolve.documents[doc].worlds.get(name) {
-                Some(world) => *world,
-                None => bail!("no world named `{name}` in document"),
-            },
-            None => match resolve.documents[doc].default_world {
-                Some(world) => world,
-                None => bail!("no default world found in document"),
-            },
-        };
+        let world = resolve.select_world(id, self.world.as_deref())?;
 
         let encoded = wit_component::metadata::encode(
             &resolve,
             world,
             self.encoding.unwrap_or(StringEncoding::UTF8),
+            None,
         )?;
 
         let section = wasm_encoder::CustomSection {
@@ -455,8 +438,27 @@ fn parse_wit(path: &Path) -> Result<(Resolve, PackageId)> {
     let id = if path.is_dir() {
         resolve.push_dir(&path)?.0
     } else {
-        let pkg = UnresolvedPackage::parse_file(&path)?;
-        resolve.push(pkg, &Default::default())?
+        let contents =
+            std::fs::read(&path).with_context(|| format!("failed to read file {path:?}"))?;
+        if is_wasm(&contents) {
+            let bytes = wat::parse_bytes(&contents).map_err(|mut e| {
+                e.set_path(path);
+                e
+            })?;
+            match wit_component::decode("root-package-name", &bytes)? {
+                DecodedWasm::Component(..) => {
+                    bail!("specified path is a component, not a wit package")
+                }
+                DecodedWasm::WitPackage(resolve, pkg) => return Ok((resolve, pkg)),
+            }
+        } else {
+            let text = match std::str::from_utf8(&contents) {
+                Ok(s) => s,
+                Err(_) => bail!("input file is not valid utf-8"),
+            };
+            let pkg = UnresolvedPackage::parse(&path, text)?;
+            resolve.push(pkg, &Default::default())?
+        }
     };
     Ok((resolve, id))
 }

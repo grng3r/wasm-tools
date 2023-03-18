@@ -1,6 +1,6 @@
 [package]
 name = "wasm-tools"
-version = "1.0.20"
+version = "1.0.28"
 authors = ["The Wasmtime Project Developers"]
 edition.workspace = true
 description = "CLI tools for interoperating with WebAssembly files"
@@ -39,20 +39,21 @@ rand = { version = "0.8.4", features = ["small_rng"] }
 rayon = "1.3"
 serde = { version = "1.0.137", features = ["derive"] }
 wasmtime = { version = "3.0.0", default-features = false, features = ['cranelift'] }
-url = "2.3.1"
+url = "2.0.0"
+pretty_assertions = "1.3.0"
 
-wasm-encoder = { version = "0.22.0", path = "crates/wasm-encoder"}
-wasm-compose = { version = "0.2.5", path = "crates/wasm-compose"}
-wasm-mutate = { version = "0.2.16", path = "crates/wasm-mutate" }
-wasm-shrink = { version = "0.1.17", path = "crates/wasm-shrink" }
-wasm-smith = { version = "0.12.0", path = "crates/wasm-smith" }
-wasmparser = { version = "0.99.0", path = "crates/wasmparser" }
-wasmparser-dump = { version = "0.1.16", path = "crates/dump" }
-wasmprinter = { version = "0.2.49", path = "crates/wasmprinter" }
-wast = { version = "52.0.2", path = "crates/wast" }
-wat = { version = "1.0.56", path = "crates/wat" }
-wit-component = { version = "0.4.4", path = "crates/wit-component" }
-wit-parser = { version = "0.4.1", path = "crates/wit-parser" }
+wasm-encoder = { version = "0.25.0", path = "crates/wasm-encoder"}
+wasm-compose = { version = "0.2.11", path = "crates/wasm-compose"}
+wasm-metadata = { version = "0.3.1", path = "crates/wasm-metadata" }
+wasm-mutate = { version = "0.2.22", path = "crates/wasm-mutate" }
+wasm-shrink = { version = "0.1.23", path = "crates/wasm-shrink" }
+wasm-smith = { version = "0.12.5", path = "crates/wasm-smith" }
+wasmparser = { version = "0.102.0", path = "crates/wasmparser" }
+wasmprinter = { version = "0.2.54", path = "crates/wasmprinter" }
+wast = { version = "55.0.0", path = "crates/wast" }
+wat = { version = "1.0.61", path = "crates/wat" }
+wit-component = { version = "0.7.4", path = "crates/wit-component" }
+wit-parser = { version = "0.6.4", path = "crates/wit-parser" }
 
 [dependencies]
 anyhow = { workspace = true }
@@ -83,9 +84,6 @@ is_executable = { version = "1.0.1", optional = true }
 # Dependencies of `mutate`
 wasm-mutate = { workspace = true, features = ["clap"], optional = true }
 
-# Dependencies of `dump`
-wasmparser-dump = { workspace = true, optional = true }
-
 # Dependencies of `strip`
 wasm-encoder = { workspace = true, optional = true }
 regex = { version = "1.6.0", optional = true }
@@ -102,15 +100,18 @@ wit-component = { workspace = true, optional = true, features = ['dummy-module']
 wit-parser = { workspace = true, optional = true }
 wast = { workspace = true, optional = true }
 
+# Dependencies of `metadata`
+wasm-metadata = { workspace = true, features = ["clap"], optional = true }
+
 [dev-dependencies]
 serde_json = "1.0"
 tempfile = "3.1"
 diff = "0.1"
-wasmparser-dump = { path = 'crates/dump' }
 wast = { path = 'crates/wast' }
+pretty_assertions = { workspace = true }
 
 [[test]]
-name = "dump"
+name = "cli"
 harness = false
 
 [[test]]
@@ -132,6 +133,7 @@ default = [
   'compose',
   'demangle',
   'component',
+  'metadata',
 ]
 
 # Each subcommand is gated behind a feature and lists the dependencies it needs
@@ -141,9 +143,10 @@ parse = []
 smith = ['wasm-smith', 'arbitrary', 'serde', 'serde_json']
 shrink = ['wasm-shrink', 'is_executable']
 mutate = ['wasm-mutate']
-dump = ['wasmparser-dump']
+dump = ['wasmparser']
 objdump = ['wasmparser']
 strip = ['wasm-encoder', 'wasmparser', 'regex']
 compose = ['wasm-compose']
 demangle = ['rustc-demangle', 'cpp_demangle', 'wasmparser', 'wasm-encoder']
 component = ['wit-component', 'wit-parser', 'wast', 'wasm-encoder', 'wasmparser']
+metadata = ['wasmparser', 'wasm-metadata', 'serde_json' ]

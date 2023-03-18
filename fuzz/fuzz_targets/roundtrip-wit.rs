@@ -25,7 +25,7 @@ fuzz_target!(|data: &[u8]| {
             Ok(id) => id,
             Err(e) => {
                 let err = e.to_string();
-                if err.contains("conflicts with a previously")
+                if err.contains("conflicts with a previous")
                     || err.contains("shadows previously imported")
                 {
                     return;
@@ -54,7 +54,8 @@ fuzz_target!(|data: &[u8]| {
 
     for (id, _world) in resolve.worlds.iter() {
         let mut dummy = wit_component::dummy_module(&resolve, id);
-        let metadata = wit_component::metadata::encode(&resolve, id, StringEncoding::UTF8).unwrap();
+        let metadata =
+            wit_component::metadata::encode(&resolve, id, StringEncoding::UTF8, None).unwrap();
         let section = CustomSection {
             name: "component-type",
             data: &metadata,
@@ -203,7 +204,7 @@ mod generate {
             let mut count = 0;
             let mut names = HashSet::new();
 
-            while self.documents.len() < MAX_DOCUMENTS && (count == 0 || u.arbitrary()?) {
+            while count < MAX_DOCUMENTS && (count == 0 || u.arbitrary()?) {
                 let name = gen_unique_name(u, &mut names)?;
                 let (doc, interfaces) = self.gen_document(u)?;
                 super::write_file(format!("orig-{pkg}-{name}.wit").as_ref(), &doc);
@@ -264,85 +265,7 @@ mod generate {
             name: &str,
             has_default: &mut bool,
         ) -> Result<String> {
-            let mut ret = String::new();
-            if !*has_default && u.arbitrary()? {
-                *has_default = true;
-                ret.push_str("default ");
-            }
-            ret.push_str("world %");
-            ret.push_str(name);
-            ret.push_str(" {\n");
-
-            #[derive(Arbitrary)]
-            enum Direction {
-                Import,
-                Export,
-            }
-
-            #[derive(Arbitrary)]
-            enum ItemKind {
-                Func,
-                Interface,
-                AnonInterface,
-            }
-
-            let mut parts = Vec::new();
-            let mut imports = HashSet::new();
-            let mut exports = HashSet::new();
-            let mut imported_interfaces = HashSet::new();
-            let mut exported_interfaces = HashSet::new();
-
-            while parts.len() < MAX_WORLD_ITEMS && !u.is_empty() && u.arbitrary()? {
-                let mut part = String::new();
-                let (desc, names, interfaces) = match u.arbitrary()? {
-                    Direction::Import => ("import", &mut imports, &mut imported_interfaces),
-                    Direction::Export => ("export", &mut exports, &mut exported_interfaces),
-                };
-                part.push_str(desc);
-                part.push_str(" %");
-                part.push_str(&gen_unique_name(u, names)?);
-                part.push_str(": ");
-
-                match u.arbitrary()? {
-                    ItemKind::Func => {
-                        InterfaceGenerator::new(self).gen_func_sig(u, &mut part)?;
-                    }
-                    ItemKind::Interface => {
-                        let id = match self.gen_path(u, &mut part)? {
-                            Some((id, _types)) => id,
-                            // If an interface couldn't be chosen or wasn't
-                            // chosen then skip this import. A unique name was
-                            // selecteed above but we just sort of leave that
-                            // floating in the wild to get handled by some other
-                            // test case.
-                            None => continue,
-                        };
-
-                        // If this interface has already been imported or
-                        // exported this document can't do so again. Throw out
-                        // this item in that situation.
-                        if !interfaces.insert(id) {
-                            continue;
-                        }
-                    }
-                    ItemKind::AnonInterface => {
-                        let iface = InterfaceGenerator::new(self).gen(u, None, &mut true)?;
-                        part.push_str(&iface);
-                    }
-                }
-                parts.push(part);
-            }
-
-            shuffle(u, &mut parts)?;
-
-            for part in parts {
-                ret.push_str(&part);
-                ret.push_str("\n");
-            }
-
-            ret.push_str("}");
-
-            Ok(ret)
+            InterfaceGenerator::new(self).gen_world(u, name, has_default)
         }
 
         fn gen_interface(
@@ -352,7 +275,7 @@ mod generate {
             has_default: &mut bool,
         ) -> Result<(String, TypeList)> {
             let mut gen = InterfaceGenerator::new(self);
-            let ret = gen.gen(u, name, has_default)?;
+            let ret = gen.gen_interface(u, name, has_default)?;
             Ok((ret, gen.types_in_interface))
         }
 
@@ -421,7 +344,7 @@ mod generate {
     }
 
     impl<'a> InterfaceGenerator<'a> {
-        fn new(gen: &'a mut Generator) -> InterfaceGenerator<'a> {
+        fn new(gen: &'a Generator) -> InterfaceGenerator<'a> {
             InterfaceGenerator {
                 gen,
                 types_in_interface: Vec::new(),
@@ -429,7 +352,7 @@ mod generate {
             }
         }
 
-        fn gen(
+        fn gen_interface(
             &mut self,
             u: &mut Unstructured<'_>,
             name: Option<&str>,
@@ -460,29 +383,9 @@ mod generate {
                 match u.arbitrary()? {
                     Generate::Use => {
                         let mut part = String::new();
-                        let mut path = String::new();
-                        let (_id, types) = match self.gen.gen_path(u, &mut path)? {
-                            Some(types) => types,
-                            None => continue,
-                        };
-                        part.push_str("use ");
-                        part.push_str(&path);
-                        part.push_str(".{");
-                        let (name, size) = u.choose(types)?;
-                        part.push_str("%");
-                        part.push_str(name);
-                        let name = if self.unique_names.contains(name) || u.arbitrary()? {
-                            part.push_str(" as %");
-                            let name = self.gen_unique_name(u)?;
-                            part.push_str(&name);
-                            name
-                        } else {
-                            assert!(self.unique_names.insert(name.clone()));
-                            name.clone()
-                        };
-                        self.types_in_interface.push((name, *size));
-                        part.push_str("}");
-                        parts.push(part);
+                        if self.gen_use(u, &mut part)? {
+                            parts.push(part);
+                        }
                     }
                     Generate::Type => {
                         let name = self.gen_unique_name(u)?;
@@ -504,6 +407,150 @@ mod generate {
 
             ret.push_str("}");
             Ok(ret)
+        }
+
+        fn gen_world(
+            &mut self,
+            u: &mut Unstructured<'_>,
+            name: &str,
+            has_default: &mut bool,
+        ) -> Result<String> {
+            let mut ret = String::new();
+            if !*has_default && u.arbitrary()? {
+                *has_default = true;
+                ret.push_str("default ");
+            }
+            ret.push_str("world %");
+            ret.push_str(name);
+            ret.push_str(" {\n");
+
+            #[derive(Arbitrary, Copy, Clone)]
+            enum Direction {
+                Import,
+                Export,
+            }
+
+            #[derive(Arbitrary)]
+            enum ItemKind {
+                Func(Direction),
+                Interface(Direction),
+                AnonInterface(Direction),
+                Type,
+                Use,
+            }
+
+            let mut parts = Vec::new();
+            let mut imported_interfaces = HashSet::new();
+            let mut exported_interfaces = HashSet::new();
+
+            while parts.len() < MAX_WORLD_ITEMS && !u.is_empty() && u.arbitrary()? {
+                let kind = u.arbitrary::<ItemKind>()?;
+                let direction = match kind {
+                    ItemKind::Func(dir)
+                    | ItemKind::Interface(dir)
+                    | ItemKind::AnonInterface(dir) => Some(dir),
+                    ItemKind::Type | ItemKind::Use => None,
+                };
+
+                let mut part = String::new();
+                let name = match direction {
+                    Some(Direction::Import) | None => gen_unique_name(u, &mut self.unique_names)?,
+                    Some(Direction::Export) => gen_unique_name(u, &mut self.unique_names)?,
+                };
+                if let Some(dir) = direction {
+                    part.push_str(match dir {
+                        Direction::Import => "import",
+                        Direction::Export => "export",
+                    });
+                    part.push_str(" %");
+                    part.push_str(&name);
+                    part.push_str(": ");
+                }
+
+                match kind {
+                    ItemKind::Func(_) => {
+                        self.gen_func_sig(u, &mut part)?;
+                    }
+                    ItemKind::Interface(dir) => {
+                        let id = match self.gen.gen_path(u, &mut part)? {
+                            Some((id, _types)) => id,
+                            // If an interface couldn't be chosen or wasn't
+                            // chosen then skip this import. A unique name was
+                            // selecteed above but we just sort of leave that
+                            // floating in the wild to get handled by some other
+                            // test case.
+                            None => continue,
+                        };
+
+                        // If this interface has already been imported or
+                        // exported this document can't do so again. Throw out
+                        // this item in that situation.
+                        let unique = match dir {
+                            Direction::Import => imported_interfaces.insert(id),
+                            Direction::Export => exported_interfaces.insert(id),
+                        };
+                        if !unique {
+                            continue;
+                        }
+                    }
+                    ItemKind::AnonInterface(_) => {
+                        let iface =
+                            InterfaceGenerator::new(self.gen).gen_interface(u, None, &mut true)?;
+                        part.push_str(&iface);
+                    }
+
+                    ItemKind::Type => {
+                        let (size, typedef) = self.gen_typedef(u, &name)?;
+                        assert!(part.is_empty());
+                        part = typedef;
+                        self.types_in_interface.push((name, size));
+                    }
+
+                    ItemKind::Use => {
+                        if !self.gen_use(u, &mut part)? {
+                            continue;
+                        }
+                    }
+                }
+                parts.push(part);
+            }
+
+            shuffle(u, &mut parts)?;
+
+            for part in parts {
+                ret.push_str(&part);
+                ret.push_str("\n");
+            }
+
+            ret.push_str("}");
+
+            Ok(ret)
+        }
+
+        fn gen_use(&mut self, u: &mut Unstructured<'_>, part: &mut String) -> Result<bool> {
+            let mut path = String::new();
+            let (_id, types) = match self.gen.gen_path(u, &mut path)? {
+                Some(types) => types,
+                None => return Ok(false),
+            };
+            part.push_str("use ");
+            part.push_str(&path);
+            part.push_str(".{");
+            let (name, size) = u.choose(types)?;
+            part.push_str("%");
+            part.push_str(name);
+            let name = if self.unique_names.contains(name) || u.arbitrary()? {
+                part.push_str(" as %");
+                let name = self.gen_unique_name(u)?;
+                part.push_str(&name);
+                name
+            } else {
+                assert!(self.unique_names.insert(name.clone()));
+                name.clone()
+            };
+            self.types_in_interface.push((name, *size));
+            part.push_str("}");
+            Ok(true)
         }
 
         fn gen_typedef(&mut self, u: &mut Unstructured<'_>, name: &str) -> Result<(usize, String)> {

@@ -1,6 +1,6 @@
 [package]
 name = "wasmparser"
-version = "0.99.0"
+version = "0.102.0"
 authors = ["Yury Delendik <ydelendik@mozilla.com>"]
 license = "Apache-2.0 WITH LLVM-exception"
 repository = "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmparser"
@@ -22,8 +22,8 @@ criterion = { workspace = true }
 wat = { path = "../wat" }
 wast = { path = "../wast" }
 rayon = { workspace = true }
-wasmparser-dump = { path = "../dump" }
 once_cell = "1.13.0"
+wasm-encoder = { workspace = true }
 
 [[bench]]
 name = "benchmark"
